@@ -89,7 +89,7 @@ export const useUpdateProductInOrder = () => {
     mutationFn: async (params: {
       orderId: string;
       productId: string;
-      data: Partial<AddProductDto>;
+      data: any;
     }) => {
       const { orderId, productId, data: payload } = params;
       const { data } = await api.put(

@@ -146,18 +146,6 @@ export default function Login() {
             </button>
           </form>
         </div>
-
-        {/* Политика и условия */}
-        <p className="mt-6 text-center text-xs text-gray-200">
-          Входя в систему, вы соглашаетесь с{" "}
-          <button className="text-blue-500 hover:underline">
-            Условиями использования
-          </button>{" "}
-          и{" "}
-          <button className="text-blue-500 hover:underline">
-            Политикой конфиденциальности
-          </button>
-        </p>
       </div>
     </div>
   );

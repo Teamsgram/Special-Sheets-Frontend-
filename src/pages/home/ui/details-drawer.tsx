@@ -137,7 +137,7 @@ const DetailsDrawer = ({
         product.product_payment_period_start_date.split("T")[0],
       product_payment_period_end_date:
         product.product_payment_period_end_date.split("T")[0],
-      product_profit_amount: String(product.product_profit_amount),
+      product_profit_amount: String(product.product_profit_amount || ""),
     });
     setShowEditForm(true); // Bu qo'shildi
     setShowActionButtons(false); // Action buttonlarni yashirish
@@ -158,7 +158,9 @@ const DetailsDrawer = ({
             editFormData.product_payment_period_start_date,
           product_payment_period_end_date:
             editFormData.product_payment_period_end_date,
-          product_profit_amount: editFormData.product_profit_amount,
+          product_profit_amount: String(
+            editFormData.product_profit_amount || ""
+          ),
         },
       });
 
@@ -799,7 +801,7 @@ const DetailsDrawer = ({
         />
 
         <div
-          className="absolute right-0 top-0 h-full w-[1400px] bg-white shadow-2xl border-l border-slate-300"
+          className="absolute right-0 top-0 h-full w-350 bg-white shadow-2xl border-l border-slate-300"
           style={{
             transform: isOpen ? "translateX(0)" : "translateX(100%)",
             transition: "transform 0.3s ease-out",
@@ -1705,6 +1707,9 @@ const DetailsDrawer = ({
                     <Button
                       variant="outlined"
                       onClick={() =>
+                        order?.order_products?.[
+                          order.order_products.length - 1
+                        ] &&
                         handleEditProduct(
                           order?.order_products?.[
                             order.order_products.length - 1
