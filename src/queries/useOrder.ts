@@ -7,12 +7,24 @@ import type {
   OrderType,
 } from "../pages/home/types";
 
-// 🧭 GET: Barcha buyurtmalar
+// 🧭 GET: Barcha active buyurtmalar
 export const useGetAllOrders = (options?: { enabled?: boolean }) => {
   return useQuery<OrderType[]>({
     queryKey: ["orders"],
     queryFn: async () => {
       const { data } = await api.get("/order/get-all-orders");
+      return data.data;
+    },
+    enabled: options?.enabled ?? true,
+  });
+};
+
+// 🧭 GET: Barcha tugatilgan buyurtmalar
+export const useGetAllFinishedOrders = (options?: { enabled?: boolean }) => {
+  return useQuery<OrderType[]>({
+    queryKey: ["finished-orders"],
+    queryFn: async () => {
+      const { data } = await api.get("/order/get-all-finished-orders");
       return data.data;
     },
     enabled: options?.enabled ?? true,
@@ -346,7 +358,7 @@ export const useSetOrderStatusToFinished = () => {
   return useMutation({
     mutationFn: async (orderId: string) => {
       const { data } = await api.patch(
-        `/order/set-status-order-to-finish/${orderId}`
+        `/order/set-order-status-to-finish/${orderId}`
       );
       return data;
     },

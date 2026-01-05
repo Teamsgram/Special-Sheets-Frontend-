@@ -7,7 +7,7 @@ import axios, {
 import { useAuthStore } from "../store/auth.store";
 
 export const api: AxiosInstance = axios.create({
-  baseURL: "https://special-sheet.onrender.com",
+  baseURL: "https://special-sheets-server.onrender.com",
   headers: {
     "Content-Type": "application/json",
   },

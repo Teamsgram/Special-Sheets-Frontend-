@@ -18,6 +18,8 @@ import {
   Card,
   CardContent,
   Typography,
+  Tabs,
+  Tab,
 } from "@mui/material";
 import { FileSpreadsheet, Plus } from "lucide-react";
 import CreateClientDrawer from "./ui/create-client-drawer";
@@ -28,10 +30,12 @@ import { useAuthStore } from "../../store/auth.store";
 import {
   useCreateOrder,
   useGetAllOrders,
+  useGetAllFinishedOrders,
   useDeleteOrderById,
   useUpdateOrderAssignedIndex,
   useAddPaymentToOrderProduct,
   useUpdatePaymentOfOrderProduct,
+  useSetOrderStatusToFinished,
 } from "../../queries/useOrder";
 
 import {
@@ -178,15 +182,85 @@ export default function SalesTable() {
   const [dialogPaymentData, setDialogPaymentData] = useState<any>(null);
   const [clientSearch, setClientSearch] = useState("");
 
+  const [fullPaymentModalOpen, setFullPaymentModalOpen] = useState(false);
+  const [completedOrderId, setCompletedOrderId] = useState<string | null>(null);
+
+  // tab state
+  const [activeTab, setActiveTab] = useState<"active" | "archived">("active");
+
   const queryClient = useQueryClient();
   const addPaymentMutation = useAddPaymentToOrderProduct();
   const updatePaymentMutation = useUpdatePaymentOfOrderProduct();
 
   const { logout } = useAuthStore();
-  const { data: orders, isLoading } = useGetAllOrders();
+  const { data: orders, isLoading } = useGetAllOrders({
+    enabled: activeTab === "active",
+  });
+  const { data: finishedOrders, isLoading: isLoadingFinished } =
+    useGetAllFinishedOrders({
+      enabled: activeTab === "archived",
+    });
+
   const createOrder = useCreateOrder();
   const updateOrderAssignedIndex = useUpdateOrderAssignedIndex();
   const deleteOrder = useDeleteOrderById();
+  const setOrderToFinished = useSetOrderStatusToFinished();
+
+  // check order which is full payed
+  const checkIfOrderFullyPaid = (order: OrderType) => {
+    const product = order.order_products[0];
+
+    console.log("=== CHECK ORDER FULLY PAID ===");
+    console.log("Product:", product);
+    console.log("Payment graphics:", product?.payment_graphics);
+
+    if (!product || !product.payment_graphics) {
+      console.log("❌ Product yoki payment_graphics yo'q");
+      return false;
+    }
+
+    const allPaid = product.payment_graphics.every((payment: any) => {
+      const paymentAmount = payment.payment_amount || 0;
+      const paidAmount = payment.payment_paid_amount || 0;
+      const isPaid = paidAmount >= paymentAmount;
+
+      console.log(
+        `Payment: ${paidAmount}/${paymentAmount} = ${isPaid ? "✅" : "❌"}`
+      );
+
+      return isPaid;
+    });
+
+    console.log(
+      "Natija:",
+      allPaid ? "✅ BARCHASI TO'LANDI" : "❌ HALI TO'LANMAGAN"
+    );
+    return allPaid;
+  };
+
+  // full payment modal handler
+  const handleFullPaymentModalClose = () => {
+    setFullPaymentModalOpen(false);
+    setCompletedOrderId(null);
+    // window.location.reload(); // Bu joyda reload saqlanadi
+  };
+  const handleFinishOrder = async () => {
+    if (!completedOrderId) return;
+
+    try {
+      await setOrderToFinished.mutateAsync(completedOrderId);
+      setFullPaymentModalOpen(false);
+      setCompletedOrderId(null);
+
+      // Orders ro'yxatini yangilash
+      await queryClient.invalidateQueries({ queryKey: ["orders"] });
+
+      // Sahifani yangilash (arxivga o'tganini ko'rish uchun)
+      // window.location.reload();
+    } catch (error) {
+      console.error("Ошибка при завершении заказа:", error);
+    }
+  };
 
   // Load investment from localStorage
   useEffect(() => {
@@ -399,6 +473,7 @@ export default function SalesTable() {
       const product = order.order_products[0];
       if (!product) return;
 
+      // To'lov qo'shish yoki yangilash
       if (editModes[paymentKey]) {
         await updatePaymentMutation.mutateAsync({
           orderId: order._id,
@@ -417,9 +492,48 @@ export default function SalesTable() {
         });
       }
 
-      await queryClient.invalidateQueries({ queryKey: ["orders"] });
+      // Edit mode ni o'chirish
       setEditModes((prev) => ({ ...prev, [paymentKey]: false }));
-      window.location.reload();
+
+      // Orders yangilash va yangi ma'lumotlarni kutish
+      await queryClient.invalidateQueries({ queryKey: ["orders"] });
+
+      // ⚠️ MUHIM: invalidate qilingandan keyin biroz kutish kerak
+      // chunki refetch async jarayon
+      await new Promise((resolve) => setTimeout(resolve, 500));
+
+      // Yangilangan orders ni olish
+      const updatedOrdersData = queryClient.getQueryData<OrderType[]>([
+        "orders",
+      ]);
+
+      if (!updatedOrdersData) {
+        console.error("Orders topilmadi");
+        return;
+      }
+
+      // Yangilangan orderni topish
+      const updatedOrder = updatedOrdersData.find((o) => o._id === order._id);
+
+      if (!updatedOrder) {
+        console.error("Order topilmadi:", order._id);
+        return;
+      }
+
+      console.log("Yangilangan order:", updatedOrder);
+      console.log(
+        "To'lovlar holati:",
+        updatedOrder.order_products[0]?.payment_graphics
+      );
+
+      // To'lovlar to'liq to'langanligini tekshirish
+      if (checkIfOrderFullyPaid(updatedOrder)) {
+        console.log("✅ Barcha to'lovlar to'landi! Modal ochilmoqda...");
+        setCompletedOrderId(order._id);
+        setFullPaymentModalOpen(true);
+      } else {
+        console.log("❌ To'lovlar hali to'liq to'lanmagan");
+      }
     } catch (err) {
       console.error("Ошибка при оплате:", err);
     }
@@ -442,9 +556,11 @@ export default function SalesTable() {
   };
 
   const filteredOrders = useMemo(() => {
-    if (!orders) return [];
+    const currentOrders = activeTab === "active" ? orders : finishedOrders;
 
-    return orders.filter((order) => {
+    if (!currentOrders) return [];
+
+    return currentOrders.filter((order) => {
       let matches = true;
 
       // Model search
@@ -466,9 +582,7 @@ export default function SalesTable() {
 
       return matches;
     });
-  }, [orders, modelSearch, clientSearch]);
-
-  // console.log(orders);
+  }, [orders, finishedOrders, modelSearch, clientSearch, activeTab]);
 
   const columns = useMemo<MRT_ColumnDef<OrderType>[]>(() => {
     return [
@@ -948,8 +1062,6 @@ export default function SalesTable() {
               ? "Активный"
               : status === "finished"
               ? "Завершен"
-              : status === "cancelled"
-              ? "Отменен"
               : "Ожидание";
           return (
             <span
@@ -1003,18 +1115,18 @@ export default function SalesTable() {
       <div className="min-h-screen bg-slate-50">
         <Container>
           <div className="">
-            {isLoading ? (
+            {isLoading || isLoadingFinished ? (
               <Box
                 sx={{
                   display: "flex",
                   alignItems: "center",
                   justifyContent: "center",
                 }}
-                className="w-full h-[100vh] flex items-center justify-center"
+                className="w-full h-screen flex items-center justify-center"
               >
                 <CircularProgress sx={{ color: "#1e40af" }} size={50} />
               </Box>
-            ) : orders?.length === 0 ? (
+            ) : orders?.length === 0 || finishedOrders?.length === 0 ? (
               <div className="w-full h-[60vh] flex flex-col gap-y-4 items-center justify-center">
                 <FileSpreadsheet size={64} className="text-gray-600" />
                 <span className="text-gray-400 text-lg font-medium">
@@ -1039,7 +1151,8 @@ export default function SalesTable() {
                   Создать первый заказ
                 </Button>
               </div>
-            ) : orders && orders?.length > 0 ? (
+            ) : (orders && orders?.length > 0) ||
+              (finishedOrders && finishedOrders?.length > 0) ? (
               <div className="mx-auto">
                 <div className="bg-white border border-slate-300">
                   <MaterialReactTable
@@ -1321,7 +1434,7 @@ export default function SalesTable() {
                             />
                           </Box>
 
-                          {/* Statistics Cards - Before Table */}
+                          {/* Statistics Cards */}
                           <Box
                             sx={{
                               display: "flex",
@@ -1362,6 +1475,39 @@ export default function SalesTable() {
                               editable={true}
                               onValueChange={handleProfitChange}
                             />
+                          </Box>
+
+                          {/* TABS  */}
+                          <Box
+                            sx={{
+                              borderTop: "1px solid #cbd5e1",
+                              backgroundColor: "#f8fafc",
+                            }}
+                          >
+                            <Tabs
+                              value={activeTab}
+                              onChange={(_, newValue) => setActiveTab(newValue)}
+                              sx={{
+                                px: 2,
+                                "& .MuiTab-root": {
+                                  textTransform: "none",
+                                  fontWeight: 600,
+                                  fontSize: "0.95rem",
+                                  color: "#64748b",
+                                  minHeight: "48px",
+                                  "&.Mui-selected": {
+                                    color: "#1e40af",
+                                  },
+                                },
+                                "& .MuiTabs-indicator": {
+                                  backgroundColor: "#1e40af",
+                                  height: 3,
+                                },
+                              }}
+                            >
+                              <Tab label="Активные заказы" value="active" />
+                              <Tab label="Архивированные" value="archived" />
+                            </Tabs>
                           </Box>
                         </div>
                       </div>
@@ -1632,6 +1778,80 @@ export default function SalesTable() {
         }}
         initial={initial}
       />
+
+      {/* Full Payment Completion Modal */}
+      <Dialog
+        open={fullPaymentModalOpen}
+        onClose={handleFullPaymentModalClose}
+        PaperProps={{
+          sx: {
+            backgroundColor: "#ffffff",
+            border: "1px solid #cbd5e1",
+            borderRadius: "8px",
+            minWidth: "450px",
+          },
+        }}
+      >
+        <DialogTitle
+          sx={{
+            color: "#047857",
+            fontWeight: 700,
+            fontSize: "1.25rem",
+            borderBottom: "1px solid #cbd5e1",
+          }}
+        >
+          Заказ полностью оплачен
+        </DialogTitle>
+        <DialogContent sx={{ mt: 2 }}>
+          <DialogContentText sx={{ color: "#475569", fontSize: "1rem" }}>
+            Этот заказ оплачен в полном объеме. Хотите завершить оформление
+            заказа и переместить его в архив?
+          </DialogContentText>
+        </DialogContent>
+        <DialogActions sx={{ p: 2, gap: 1 }}>
+          <Button
+            onClick={handleFullPaymentModalClose}
+            disabled={setOrderToFinished.isPending}
+            sx={{
+              textTransform: "none",
+              fontWeight: 600,
+              color: "#64748b",
+              "&:hover": {
+                backgroundColor: "#f1f5f9",
+              },
+              borderRadius: "6px",
+              px: 3,
+            }}
+          >
+            Нет
+          </Button>
+          <Button
+            onClick={handleFinishOrder}
+            variant="contained"
+            disabled={setOrderToFinished.isPending}
+            sx={{
+              textTransform: "none",
+              fontWeight: 700,
+              minWidth: "120px",
+              backgroundColor: "#047857",
+              "&:hover": {
+                backgroundColor: "#065f46",
+              },
+              borderRadius: "6px",
+              px: 3,
+            }}
+          >
+            {setOrderToFinished.isPending ? (
+              <>
+                <CircularProgress size={20} sx={{ color: "white", mr: 1 }} />
+                Завершение...
+              </>
+            ) : (
+              "Да"
+            )}
+          </Button>
+        </DialogActions>
+      </Dialog>
     </>
   );
 }

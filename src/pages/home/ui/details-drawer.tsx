@@ -52,6 +52,7 @@ import {
   useDeleteProductFromOrder,
   useCreateOrderProductPaymentGraphics,
   useUpdateProductInOrder,
+  useSetOrderStatusToFinished,
 } from "../../../queries/useOrder";
 
 import { useQueryClient } from "@tanstack/react-query";
@@ -62,7 +63,7 @@ interface NewProductForm {
   product_full_amount: string;
   product_pre_paid_amount: string;
   product_payment_period_start_date: string;
-  product_payment_period_end_date: string;
+  product_payment_months: string;
   product_profit_amount: string;
 }
 
@@ -126,8 +127,29 @@ const DetailsDrawer = ({
   const [editingProductId, setEditingProductId] = useState<string | null>(null);
   const [editFormData, setEditFormData] = useState<NewProductForm | null>(null);
   const updateProductMutation = useUpdateProductInOrder();
+  const [openArchiveDialog, setOpenArchiveDialog] = useState(false);
+  const setOrderToFinished = useSetOrderStatusToFinished();
+
+  // Date calculation helper
+  const calculateEndDate = (startDate: string, months: number): string => {
+    if (!startDate || !months) return "";
+
+    const start = new Date(startDate);
+    const endDate = new Date(start);
+    endDate.setMonth(endDate.getMonth() + months);
+
+    // Format: YYYY-MM-DD
+    return endDate.toISOString().split("T")[0];
+  };
 
   const handleEditProduct = (product: OrderType["order_products"][0]) => {
+    // Months ni hisoblash
+    const startDate = new Date(product.product_payment_period_start_date);
+    const endDate = new Date(product.product_payment_period_end_date);
+    const monthsDiff =
+      (endDate.getFullYear() - startDate.getFullYear()) * 12 +
+      (endDate.getMonth() - startDate.getMonth());
+
     setEditingProductId(product._id);
     setEditFormData({
       product_name: product.product_name,
@@ -135,18 +157,23 @@ const DetailsDrawer = ({
       product_pre_paid_amount: String(product.product_pre_paid_amount),
       product_payment_period_start_date:
         product.product_payment_period_start_date.split("T")[0],
-      product_payment_period_end_date:
-        product.product_payment_period_end_date.split("T")[0],
+      product_payment_months: String(monthsDiff), // Bu o'zgardi
       product_profit_amount: String(product.product_profit_amount || ""),
     });
-    setShowEditForm(true); // Bu qo'shildi
-    setShowActionButtons(false); // Action buttonlarni yashirish
+    setShowEditForm(true);
+    setShowActionButtons(false);
   };
 
   const handleUpdateProduct = async () => {
     if (!editingProductId || !editFormData) return;
 
     try {
+      // End date ni hisoblash
+      const endDate = calculateEndDate(
+        editFormData.product_payment_period_start_date,
+        Number(editFormData.product_payment_months)
+      );
+
       await updateProductMutation.mutateAsync({
         orderId: saleId,
         productId: editingProductId,
@@ -156,8 +183,7 @@ const DetailsDrawer = ({
           product_pre_paid_amount: Number(editFormData.product_pre_paid_amount),
           product_payment_period_start_date:
             editFormData.product_payment_period_start_date,
-          product_payment_period_end_date:
-            editFormData.product_payment_period_end_date,
+          product_payment_period_end_date: endDate, // Hisoblangan date
           product_profit_amount: String(
             editFormData.product_profit_amount || ""
           ),
@@ -168,8 +194,8 @@ const DetailsDrawer = ({
 
       setEditingProductId(null);
       setEditFormData(null);
-      setShowEditForm(false); // Bu qo'shildi
-      setShowActionButtons(true); // Action buttonlarni qaytarish
+      setShowEditForm(false);
+      setShowActionButtons(true);
     } catch (error) {
       console.error("Mahsulotni yangilashda xatolik:", error);
     }
@@ -182,6 +208,35 @@ const DetailsDrawer = ({
     setShowActionButtons(true); // Action buttonlarni qaytarish
   };
 
+  // Orderning barcha to'lovlari to'liq to'langanligini tekshirish
+  const isOrderFullyPaid = useMemo(() => {
+    if (!order || !order.order_products || order.order_products.length === 0) {
+      return false;
+    }
+
+    const product = order.order_products[0];
+    if (
+      !product ||
+      !product.payment_graphics ||
+      product.payment_graphics.length === 0
+    ) {
+      return false;
+    }
+
+    const allPaid = product.payment_graphics.every((payment: any) => {
+      const paymentAmount = payment.payment_amount || 0;
+      const paidAmount = payment.payment_paid_amount || 0;
+      return paidAmount >= paymentAmount;
+    });
+
+    return allPaid;
+  }, [order]);
+
+  // Order hali arxivlanmagan va to'lovlar to'liq to'langanligini tekshirish
+  const shouldShowArchiveButton = useMemo(() => {
+    return isOrderFullyPaid && order?.order_status === "process";
+  }, [isOrderFullyPaid, order?.order_status]);
+
   const handleCloseDrawer = () => {
     setShowActionButtons(false);
     setLastAddedProductId(null);
@@ -191,6 +246,24 @@ const DetailsDrawer = ({
     setNewRows([]);
     setShowAddButtons(false);
     onClose();
+  };
+
+  const handleArchiveOrder = async () => {
+    if (!order?._id) return;
+
+    try {
+      await setOrderToFinished.mutateAsync(order._id);
+      setOpenArchiveDialog(false);
+
+      // Order ma'lumotlarini yangilash
+      await queryClient.invalidateQueries({ queryKey: ["order", saleId] });
+      await queryClient.invalidateQueries({ queryKey: ["orders"] });
+
+      // Drawer-ni yopish
+      handleCloseDrawer();
+    } catch (error) {
+      console.error("Ошибка при архивировании заказа:", error);
+    }
   };
 
   const handleConfirmDelete = async () => {
@@ -685,7 +758,7 @@ const DetailsDrawer = ({
         product_full_amount: "",
         product_pre_paid_amount: "",
         product_payment_period_start_date: "",
-        product_payment_period_end_date: "",
+        product_payment_months: "",
         product_profit_amount: "",
       },
     };
@@ -714,14 +787,19 @@ const DetailsDrawer = ({
       for (const rowId of Object.keys(data)) {
         const formData = data[rowId];
 
+        // End date ni hisoblash
+        const endDate = calculateEndDate(
+          formData.product_payment_period_start_date,
+          Number(formData.product_payment_months)
+        );
+
         const productData: AddProductDto = {
           product_name: formData.product_name,
           product_full_amount: Number(formData.product_full_amount),
           product_pre_paid_amount: Number(formData.product_pre_paid_amount),
           product_payment_period_start_date:
             formData.product_payment_period_start_date,
-          product_payment_period_end_date:
-            formData.product_payment_period_end_date,
+          product_payment_period_end_date: endDate, // Hisoblangan date
           product_profit_amount: formData.product_profit_amount,
         };
 
@@ -741,7 +819,7 @@ const DetailsDrawer = ({
       await queryClient.invalidateQueries({ queryKey: ["order", saleId] });
 
       setLastAddedProductId(addedProductId);
-      setShowActionButtons(true); // Buttonlarni ko'rsatish
+      setShowActionButtons(true);
       setNewRows([]);
       setShowAddButtons(false);
       reset();
@@ -1007,7 +1085,7 @@ const DetailsDrawer = ({
                         <div>Предоплата</div>
                         <div>Сумма прибыли от продукта</div>
                         <div>Дата начало</div>
-                        <div>Дата окончания</div>
+                        <div>Срок (мес.)</div>
                       </div>
 
                       {newRows.map((row, _idx) => (
@@ -1253,25 +1331,30 @@ const DetailsDrawer = ({
                           <div className="flex items-center gap-x-3">
                             <div className="flex-1">
                               <Controller
-                                name={`${row.id}.product_payment_period_end_date`}
+                                name={`${row.id}.product_payment_months`}
                                 control={control}
                                 rules={{
-                                  required: "Дата окончания обязательна",
+                                  required: "Срок обязателен",
+                                  validate: (value) => {
+                                    const months = Number(value);
+                                    if (months < 1) return "Минимум 1 месяц";
+                                    if (months > 12)
+                                      return "Максимум 12 месяцев";
+                                    return true;
+                                  },
                                 }}
                                 render={({ field }) => (
                                   <TextField
                                     {...field}
-                                    label="Дата окончания"
+                                    label="Срок (месяцы)"
                                     size="small"
                                     fullWidth
-                                    type="date"
+                                    type="number"
                                     error={
-                                      !!errors[row.id]
-                                        ?.product_payment_period_end_date
+                                      !!errors[row.id]?.product_payment_months
                                     }
                                     helperText={
-                                      errors[row.id]
-                                        ?.product_payment_period_end_date
+                                      errors[row.id]?.product_payment_months
                                         ?.message
                                     }
                                     InputLabelProps={{ shrink: true }}
@@ -1449,6 +1532,85 @@ const DetailsDrawer = ({
                   </DialogActions>
                 </Dialog>
 
+                {/* Arxivlash tasdiqlash modali */}
+                <Dialog
+                  open={openArchiveDialog}
+                  onClose={() => setOpenArchiveDialog(false)}
+                  PaperProps={{
+                    sx: {
+                      backgroundColor: "#ffffff",
+                      border: "1px solid #cbd5e1",
+                      borderRadius: "8px",
+                      minWidth: "450px",
+                    },
+                  }}
+                >
+                  <DialogTitle
+                    sx={{
+                      color: "#047857",
+                      fontWeight: 700,
+                      fontSize: "1.25rem",
+                      borderBottom: "1px solid #cbd5e1",
+                    }}
+                  >
+                    Архивирование заказа
+                  </DialogTitle>
+                  <DialogContent sx={{ mt: 2 }}>
+                    <DialogContentText
+                      sx={{ color: "#475569", fontSize: "1rem" }}
+                    >
+                      Этот заказ оплачен в полном объеме. Хотите завершить
+                      оформление заказа и переместить его в архив?
+                    </DialogContentText>
+                  </DialogContent>
+                  <DialogActions sx={{ p: 2, gap: 1 }}>
+                    <Button
+                      onClick={() => setOpenArchiveDialog(false)}
+                      disabled={setOrderToFinished.isPending}
+                      sx={{
+                        textTransform: "none",
+                        fontWeight: 600,
+                        color: "#64748b",
+                        "&:hover": {
+                          backgroundColor: "#f1f5f9",
+                        },
+                        borderRadius: "6px",
+                        px: 3,
+                      }}
+                    >
+                      Нет
+                    </Button>
+                    <Button
+                      onClick={handleArchiveOrder}
+                      variant="contained"
+                      disabled={setOrderToFinished.isPending}
+                      sx={{
+                        textTransform: "none",
+                        fontWeight: 700,
+                        minWidth: "120px",
+                        backgroundColor: "#047857",
+                        "&:hover": {
+                          backgroundColor: "#065f46",
+                        },
+                        borderRadius: "6px",
+                        px: 3,
+                      }}
+                    >
+                      {setOrderToFinished.isPending ? (
+                        <>
+                          <CircularProgress
+                            size={20}
+                            sx={{ color: "white", mr: 1 }}
+                          />
+                          Архивирование...
+                        </>
+                      ) : (
+                        "Да"
+                      )}
+                    </Button>
+                  </DialogActions>
+                </Dialog>
+
                 {/* Edit Form - mahsulotni tahrirlash */}
                 {showEditForm && editFormData && (
                   <div className="bg-white border border-slate-300 overflow-hidden mb-6">
@@ -1581,7 +1743,7 @@ const DetailsDrawer = ({
                         />
 
                         <TextField
-                          label="Дата начала"
+                          label="Дата начало продажи"
                           size="small"
                           fullWidth
                           type="date"
@@ -1612,15 +1774,15 @@ const DetailsDrawer = ({
                         />
 
                         <TextField
-                          label="Дата окончания"
+                          label="Срок (месяцы)"
                           size="small"
                           fullWidth
-                          type="date"
-                          value={editFormData.product_payment_period_end_date}
+                          type="number"
+                          value={editFormData.product_payment_months}
                           onChange={(e) =>
                             setEditFormData({
                               ...editFormData,
-                              product_payment_period_end_date: e.target.value,
+                              product_payment_months: e.target.value,
                             })
                           }
                           InputLabelProps={{ shrink: true }}
@@ -1751,6 +1913,43 @@ const DetailsDrawer = ({
                     >
                       Создать график
                     </Button>
+                  </div>
+                )}
+
+                {/* Archive button - barcha to'lovlar to'langanda */}
+                {shouldShowArchiveButton && (
+                  <div className="bg-amber-50 border border-amber-200 p-4 mb-6">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-3">
+                        <CheckCircle className="text-amber-700" size={24} />
+                        <div>
+                          <p className="text-amber-900 font-bold text-base">
+                            Все платежи завершены
+                          </p>
+                          <p className="text-amber-700 text-sm">
+                            Заказ можно переместить в архив
+                          </p>
+                        </div>
+                      </div>
+                      <Button
+                        variant="contained"
+                        onClick={() => setOpenArchiveDialog(true)}
+                        startIcon={<Package size={18} />}
+                        sx={{
+                          backgroundColor: "#d97706",
+                          "&:hover": {
+                            backgroundColor: "#b45309",
+                          },
+                          textTransform: "none",
+                          fontWeight: 700,
+                          px: 3,
+                          py: 1.2,
+                          borderRadius: "2px",
+                        }}
+                      >
+                        Архивирование
+                      </Button>
+                    </div>
                   </div>
                 )}
 
